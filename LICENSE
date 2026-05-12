@@ -1,0 +1,36 @@
+Statico License
+Version 1.0, May 2026
+
+Copyright (c) 2026 ciacob
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to use,
+copy, modify, merge, and distribute the Software, including for commercial
+purposes, subject to the following conditions:
+
+1. ATTRIBUTION
+   All copies or substantial portions of the Software, whether original or
+   modified, must retain this license text, the above copyright notice, and
+   clear attribution to the original project (Statico,
+   https://github.com/ciacob/statico).
+
+2. NO REBRANDING OR RESALE
+   The Software, or any substantially similar derivative, may not be sold,
+   sublicensed for a fee, or distributed under a different name or brand as
+   a standalone product. Incorporating the Software into a larger work and
+   charging for that larger work is permitted, provided the Software itself
+   is not the primary commercial offering.
+
+3. SHARE-ALIKE
+   Any derivative work — modified versions, forks, or works that incorporate
+   substantial portions of the Software — must be distributed under the terms
+   of this license, without additional restrictions.
+
+4. NO WARRANTY
+   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+   OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+   FITNESS FOR A PARTICULAR PURPOSE, AND NONINFRINGEMENT. IN NO EVENT SHALL
+   THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER
+   LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT, OR OTHERWISE, ARISING
+   FROM, OUT OF, OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+   DEALINGS IN THE SOFTWARE.

@@ -1,0 +1,21 @@
+{
+  "name": "statico",
+  "version": "0.1.0",
+  "description": "A minimal, modular static site compiler with declarative build pipelines.",
+  "type": "commonjs",
+  "main": "src/index.js",
+  "bin": {
+    "statico-init": "./bin/init.js",
+    "statico-build": "./bin/build.js",
+    "statico-validate": "./bin/validate.js"
+  },
+  "scripts": {
+    "test": "node --test test/**/*.test.js",
+    "test:watch": "node --test --watch test/**/*.test.js"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "keywords": ["static-site", "generator", "build-tool"],
+  "license": "MIT"
+}
