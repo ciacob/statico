@@ -27,33 +27,45 @@ async function build(siteRoot, options = {}) {
 
   log(`[statico] Building site at: ${abs}`);
 
-  // 1. Load resolver registry
-  const resolversDir = path.join(abs, '_resolvers');
-  const registry = loadRegistry(resolversDir);
-  log(`[statico] Loaded ${Object.keys(registry).length} resolver namespace(s)`);
+  // Change into the site folder for the duration of the build so that
+  // resolver functions using relative paths always work regardless of
+  // where the statico-build command was invoked from.
+  const originalCwd = process.cwd();
+  process.chdir(abs);
 
-  // 2. Seed ctx from commons.json
-  const ctx = createCtx(abs);
-  log(`[statico] Context seeded`);
+  try {
+    // 1. Load resolver registry
+    const resolversDir = path.join(abs, '_resolvers');
+    const registry = loadRegistry(resolversDir);
+    log(`[statico] Loaded ${Object.keys(registry).length} resolver namespace(s)`);
 
-  // 3. Load build definition
-  const buildDef = loadBuildDef(abs);
-  log(`[statico] Build definition loaded (${buildDef.buildSteps.length} step(s))`);
+    // 2. Seed ctx from commons.json
+    const ctx = createCtx(abs);
+    log(`[statico] Context seeded`);
 
-  // 4. Optionally clear _out
-  const outDir = path.join(abs, '_out');
-  if (options.clearOut !== false) {
-    if (fs.existsSync(outDir)) {
-      await fsp.rm(outDir, { recursive: true, force: true });
-      log(`[statico] Cleared _out/`);
+    // 3. Load build definition
+    const buildDef = loadBuildDef(abs);
+    log(`[statico] Build definition loaded (${buildDef.buildSteps.length} step(s))`);
+
+    // 4. Optionally clear _out
+    const outDir = path.join(abs, '_out');
+    if (options.clearOut !== false) {
+      if (fs.existsSync(outDir)) {
+        await fsp.rm(outDir, { recursive: true, force: true });
+        log(`[statico] Cleared _out/`);
+      }
+      await fsp.mkdir(outDir, { recursive: true });
     }
-    await fsp.mkdir(outDir, { recursive: true });
+
+    // 5. Run pipeline
+    await runPipeline(buildDef, ctx, registry, abs, { logger: log });
+
+    log(`[statico] Build complete → ${outDir}`);
+
+  } finally {
+    // Always restore the original working directory.
+    process.chdir(originalCwd);
   }
-
-  // 5. Run pipeline
-  await runPipeline(buildDef, ctx, registry, abs, { logger: log });
-
-  log(`[statico] Build complete → ${outDir}`);
 }
 
 module.exports = { build };
