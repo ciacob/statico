@@ -14,6 +14,7 @@ const path = require('path');
 const { loadRegistry }  = require('../engine/registry');
 const { createCtx }     = require('../engine/context');
 const { loadBuildDef, runPipeline } = require('../engine/pipeline');
+const { loadInterceptors }  = require('../engine/interceptors');
 
 /**
  * Run a full build for the given site root.
@@ -39,15 +40,19 @@ async function build(siteRoot, options = {}) {
     const registry = loadRegistry(resolversDir);
     log(`[statico] Loaded ${Object.keys(registry).length} resolver namespace(s)`);
 
-    // 2. Seed ctx from commons.json
+    // 2. Load interceptors
+    const interceptors = loadInterceptors(abs);
+    log(`[statico] Loaded ${interceptors.size} interceptor(s)`);
+
+    // 3. Seed ctx from commons.json
     const ctx = createCtx(abs);
     log(`[statico] Context seeded`);
 
-    // 3. Load build definition
+    // 4. Load build definition
     const buildDef = loadBuildDef(abs);
     log(`[statico] Build definition loaded (${buildDef.buildSteps.length} step(s))`);
 
-    // 4. Optionally clear _out
+    // 5. Optionally clear _out
     const outDir = path.join(abs, '_out');
     if (options.clearOut !== false) {
       if (fs.existsSync(outDir)) {
@@ -57,8 +62,8 @@ async function build(siteRoot, options = {}) {
       await fsp.mkdir(outDir, { recursive: true });
     }
 
-    // 5. Run pipeline
-    await runPipeline(buildDef, ctx, registry, abs, { logger: log });
+    // 6. Run pipeline
+    await runPipeline(buildDef, ctx, registry, abs, { logger: log, interceptors });
 
     log(`[statico] Build complete → ${outDir}`);
 

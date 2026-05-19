@@ -14,6 +14,7 @@ module.exports = {
   validator: require('./engine/validator'),
   steps:     require('./engine/steps'),
   logger:    require('./engine/logger'),
+  interceptors: require('./engine/interceptors'),
 
   // CLI actions
   build:     require('./cli/build').build,

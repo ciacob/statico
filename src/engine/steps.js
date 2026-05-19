@@ -10,20 +10,26 @@
  *   - ctx:       the live build context (may be mutated by resolve/loop steps)
  *   - registry:  the resolver function registry
  *   - siteRoot:  absolute path to the site folder
- *   - options:   runtime options (e.g. { dryRun: false, logger })
+ *   - options:   runtime options (e.g. { dryRun: false, logger, interceptors })
  *
  * Executors are async. They return nothing; side effects are:
  *   - Mutating ctx (resolve, loop)
  *   - Writing files (output)
  *   - Copying files (copy)
  *   - Logging (all)
+ * 
+ * Interceptor hooks:
+ *   resolve : fires before ctx is mutated; can alter or suppress the value
+ *   output  : fires before file is written; can alter content or suppress write
+ *   copy    : fires before each file is copied; can redirect source or suppress copy
  */
 
 const fs = require('fs');
 const fsp = require('fs/promises');
 const path = require('path');
-const { interpolate, resolveValue } = require('./resolver');
+const { interpolate, resolveValue, getByPath } = require('./resolver');
 const { setByPath, loadContent, loadTemplate } = require('./context');
+const { runStepInterceptors } = require('./interceptors');
 
 class StepError extends Error {
   constructor(stepType, message, cause) {
@@ -32,6 +38,82 @@ class StepError extends Error {
     this.stepType = stepType;
     if (cause) this.cause = cause;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Interceptor helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Run step interceptors and return { skip, value }.
+ * Gracefully handles the case where no interceptors are loaded.
+ *
+ * @param {string} stepType
+ * @param {object} args
+ * @param {object} options
+ * @returns {{ skip: boolean, value: * }}
+ */
+function applyInterceptors(stepType, args, options) {
+  const interceptors = options.interceptors;
+  if (!interceptors || interceptors.size === 0) return { skip: false, value: null };
+  const tools = { log: options.logger || (() => {}) };
+  return runStepInterceptors(interceptors, stepType, args, tools);
+}
+
+/**
+ * Recursively copy a directory to a destination, running copy interceptors
+ * against each individual file encountered. Directories are created as needed;
+ * interceptors never fire on directory nodes, only on files.
+ *
+ * @param {string} srcDir   Absolute path to the source directory
+ * @param {string} dstDir   Absolute path to the destination directory
+ * @param {object} options  Runtime options, including interceptors and logger
+ * @param {Function} log    Logging function
+ * @returns {Promise<void>}
+ */
+async function copyDirWithInterceptors(srcDir, dstDir, options, log) {
+  await fsp.mkdir(dstDir, { recursive: true });
+  const entries = await fsp.readdir(srcDir, { withFileTypes: true });
+  for (const entry of entries) {
+    const src = path.join(srcDir, entry.name);
+    const dst = path.join(dstDir, entry.name);
+    if (entry.isDirectory()) {
+      await copyDirWithInterceptors(src, dst, options, log);
+    } else {
+      await copySingleFileWithInterceptors(src, dst, options, log);
+    }
+  }
+}
+
+/**
+ * Copy a single file to a destination, running copy interceptors before
+ * the operation. Interceptors may suppress the copy (returning false),
+ * allow it unchanged (returning true), or redirect it to an alternate
+ * source file (returning a path string).
+ *
+ * @param {string}   srcPath  Absolute path to the source file
+ * @param {string}   dstPath  Absolute path to the destination file
+ * @param {object}   options  Runtime options, including interceptors and logger
+ * @param {Function} log      Logging function
+ * @returns {Promise<void>}
+ */
+async function copySingleFileWithInterceptors(srcPath, dstPath, options, log) {
+  // Interceptor hook: fires before each file copy
+  const { skip, value } = applyInterceptors('copy', {
+    'source-path': srcPath,
+    'target-path': dstPath,
+  }, options);
+
+  if (skip) {
+    log(`  copy (intercepted/skipped): ${srcPath}`);
+    return;
+  }
+
+  const effectiveSrc = (value !== null && value !== true) ? value : srcPath;
+
+  await fsp.mkdir(path.dirname(dstPath), { recursive: true });
+  await fsp.copyFile(effectiveSrc, dstPath);
+  log(`  copy: ${srcPath} → ${dstPath}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -94,7 +176,19 @@ async function executeResolve(step, ctx, registry, siteRoot, options) {
     throw new StepError('resolve', `Interpolation failed in "${templatePath}": ${e.message}`, e);
   }
 
-  setByPath(ctx, target, result);
+  // Interceptor hook: fires before ctx mutation
+  const { skip, value } = applyInterceptors('resolve', {
+    'template': templatePath,
+    'value':    result,
+  }, options);
+
+  if (skip) {
+    log(`  resolve (intercepted/skipped): "${templatePath}"`);
+    return;
+  }
+
+  const finalValue = value !== null ? value : result;
+  setByPath(ctx, target, finalValue);
   log(`  resolve: "${templatePath}" → ctx.${target}`);
 }
 
@@ -125,7 +219,6 @@ async function executeOutput(step, ctx, registry, siteRoot, options) {
   if (!source) throw new StepError('output', '"source" (ctx path) is required');
   if (!target) throw new StepError('output', '"target" (output path) is required');
 
-  const { getByPath } = require('./resolver');
   const content = getByPath(ctx, source);
   if (content === undefined) {
     throw new StepError('output', `ctx path not found: "${source}"`);
@@ -144,8 +237,21 @@ async function executeOutput(step, ctx, registry, siteRoot, options) {
     return;
   }
 
+  // Interceptor hook: fires before file write
+  const { skip, value } = applyInterceptors('output', {
+    'content':   String(content),
+    'file-path': outPath,
+  }, options);
+
+  if (skip) {
+    log(`  output (intercepted/skipped): _out/${target}`);
+    return;
+  }
+
+  const finalContent = (value !== null && value !== true) ? value : String(content);
+
   await fsp.mkdir(path.dirname(outPath), { recursive: true });
-  await fsp.writeFile(outPath, String(content), 'utf8');
+  await fsp.writeFile(outPath, finalContent, 'utf8');
   log(`  output: ctx.${source} → _out/${target}`);
 }
 
@@ -198,9 +304,13 @@ async function executeCopy(step, ctx, registry, siteRoot, options) {
     throw new StepError('copy', `Source not found: "${source}"`);
   }
 
-  await fsp.mkdir(path.dirname(dstPath), { recursive: true });
-  await fsp.cp(srcPath, dstPath, { recursive: true });
-  log(`  copy: ${source} → _out/${target}`);
+  // For directory copies, iterate files individually so interceptors can act per-file
+  const stat = fs.statSync(srcPath);
+  if (stat.isDirectory()) {
+    await copyDirWithInterceptors(srcPath, dstPath, options, log);
+  } else {
+    await copySingleFileWithInterceptors(srcPath, dstPath, options, log);
+  }
 }
 
 // ---------------------------------------------------------------------------

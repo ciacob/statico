@@ -14,6 +14,7 @@ const path = require('path');
 const STRUCTURE = [
   '_templates',
   '_resolvers',
+  '_interceptors',
   '_logs',
   '_out',
   'assets',
@@ -31,6 +32,25 @@ List the languages your site supports, e.g. en, ro.
 
 ## Entry Points
 List the main output files expected after a build, e.g. _out/index.html.
+`,
+
+  '_interceptors/_interceptors-info.md': `# Interceptors
+
+Place interceptor subfolders here. Each subfolder must contain:
+  - interceptor.json  — defines the interceptor name and trigger
+  - transformation.js — exports a pure \`transform(args, output, tools)\` function
+
+Two trigger types:
+  step:     hooked into copy/resolve/output steps automatically
+  explicit: triggered via \`interceptBy\` in any JSON node
+
+Engine-injected argument keys by step type:
+  copy    : { "source-path", "target-path" }
+  resolve : { "template", "value" }
+  output  : { "content", "file-path" }
+
+Interceptor names must not begin with "statico".
+See the Statico documentation for full examples.
 `,
 
   '_templates/_templates-info.md': `# Templates
@@ -98,6 +118,12 @@ const SAMPLE_UTILS_RESOLVER = `'use strict';
  *
  * Export a "utils" namespace with helper functions available
  * throughout your templates and build.json as {{fn:utils.*}}.
+ *
+ * File access note
+ * ----------------
+ * The build engine changes into the site root before running the pipeline,
+ * so relative paths like 'contents/commons.json' always resolve correctly
+ * regardless of where you invoke statico-build from.
  */
 
 /**
@@ -149,12 +175,41 @@ function buildDate() {
   return new Date().toISOString().slice(0, 10);
 }
 
+/**
+ * Read and parse a JSON file relative to the site root.
+ *
+ * @param {string} relativePath   e.g. 'contents/commons.json'
+ * @returns {*}
+ */
+function readJson(relativePath) {
+  return JSON.parse(fs.readFileSync(relativePath, 'utf8'));
+}
+
+/**
+ * Example prepare function: reads commons.json and returns a plain object
+ * that will be stored at ctx.current. Call it from a prepare template like:
+ *   {{fn:utils.preparePage({{langItem.lang}})}}
+ *
+ * @param {string} lang
+ * @returns {object}
+ */
+function preparePage(lang) {
+  const commons = readJson('contents/commons.json');
+  return {
+    lang,
+    siteTitle: commons.site && commons.site.name ? commons.site.name : '',
+    buildDate: buildDate(),
+  };
+}
+
 module.exports = {
   utils: {
     getCookieScript,
     getLanguageSwitcherScript,
     joinPath,
     buildDate,
+    readJson,
+    preparePage,
   },
 };
 `;

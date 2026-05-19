@@ -22,6 +22,7 @@ const fs = require('fs');
 const path = require('path');
 const { extractExpressions, validateFnRef, isFnCall } = require('./resolver');
 const { loadBuildDef } = require('./pipeline');
+const { loadInterceptors, validateInterceptors } = require('./interceptors');
 
 class ValidationError extends Error {
   constructor(message) {
@@ -48,6 +49,16 @@ function validate(siteRoot, registry, options = {}) {
     buildDef = loadBuildDef(siteRoot);
   } catch (e) {
     return { errors: [e.message], warnings };
+  }
+
+  // 1b. Validate interceptors
+  try {
+    const interceptors = loadInterceptors(siteRoot);
+    const iResult = validateInterceptors(interceptors, siteRoot);
+    errors.push(...iResult.errors);
+    warnings.push(...iResult.warnings);
+  } catch (e) {
+    errors.push(`Interceptor loading failed: ${e.message}`);
   }
 
   // 2. Walk all steps and collect issues
