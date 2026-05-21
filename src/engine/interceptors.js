@@ -45,6 +45,7 @@ const RESERVED_PREFIX   = 'statico';
 const VALID_STEP_TYPES  = ['copy', 'resolve', 'output'];
 const VALID_TRIGGER_TYPES = ['step', 'explicit'];
 const ARG_PREFIX        = '@';
+const CONFIG_FILE       = 'config.json';
 
 // ---------------------------------------------------------------------------
 // Loading
@@ -103,6 +104,158 @@ function loadInterceptors(siteRoot) {
   }
 
   return registry;
+}
+
+
+// ---------------------------------------------------------------------------
+// Config (execution order)
+// ---------------------------------------------------------------------------
+
+/**
+ * Load and parse `_interceptors/config.json` if present.
+ * Returns null if the file does not exist.
+ *
+ * @param {string} siteRoot
+ * @returns {object|null}
+ */
+function loadConfig(siteRoot) {
+  const configPath = path.join(siteRoot, INTERCEPTORS_DIR, CONFIG_FILE);
+  if (!fs.existsSync(configPath)) return null;
+  try {
+    return JSON.parse(fs.readFileSync(configPath, 'utf8'));
+  } catch (e) {
+    throw new InterceptorError(`Failed to parse config.json: ${e.message}`, e);
+  }
+}
+
+/**
+ * Validate the contents of config.json against the registry.
+ * Returns an array of error strings (empty if valid).
+ *
+ * @param {object} config     Parsed config.json object
+ * @param {Map}    registry   Loaded interceptor registry
+ * @returns {string[]}
+ */
+function validateConfig(config, registry) {
+  const errors = [];
+
+  if (!config.stepInterceptors || typeof config.stepInterceptors !== 'object') {
+    errors.push('config.json must have a "stepInterceptors" root object');
+    return errors;
+  }
+
+  const { order } = config.stepInterceptors;
+
+  if (!order || typeof order !== 'object' || Array.isArray(order)) {
+    errors.push('config.json "stepInterceptors" must have an "order" object');
+    return errors;
+  }
+
+  const orderKeys = Object.keys(order);
+
+  if (orderKeys.length === 0) {
+    errors.push('config.json "stepInterceptors.order" must have at least one child node');
+    return errors;
+  }
+
+  if (orderKeys.length > 3) {
+    errors.push('config.json "stepInterceptors.order" must have at most three child nodes');
+  }
+
+  for (const stepType of orderKeys) {
+    if (!VALID_STEP_TYPES.includes(stepType)) {
+      errors.push(
+        `config.json "order" has invalid step type "${stepType}" ` +
+        `(expected: ${VALID_STEP_TYPES.join(', ')})`
+      );
+      continue;
+    }
+
+    const list = order[stepType];
+
+    if (!Array.isArray(list) || list.length === 0) {
+      errors.push(`config.json "order.${stepType}" must be a non-empty array`);
+      continue;
+    }
+
+    const seen = new Set();
+    for (const name of list) {
+      // Must be unique within the list
+      if (seen.has(name)) {
+        errors.push(`config.json "order.${stepType}" has duplicate entry "${name}"`);
+        continue;
+      }
+      seen.add(name);
+
+      // Must reference an existing interceptor
+      const entry = registry.get(name);
+      if (!entry) {
+        errors.push(
+          `config.json "order.${stepType}" references unknown interceptor "${name}"`
+        );
+        continue;
+      }
+
+      // Must reference a step interceptor of the matching stepType
+      if (entry.definition.trigger.type !== 'step') {
+        errors.push(
+          `config.json "order.${stepType}" references "${name}" which is not a step interceptor`
+        );
+        continue;
+      }
+
+      if (entry.definition.trigger.stepType !== stepType) {
+        errors.push(
+          `config.json "order.${stepType}" references "${name}" whose stepType is ` +
+          `"${entry.definition.trigger.stepType}", not "${stepType}"`
+        );
+      }
+    }
+  }
+
+  return errors;
+}
+
+/**
+ * Re-order the registry entries for a given stepType according to config.json.
+ * Listed interceptors run first in specified order; unlisted ones follow in
+ * filesystem scan order (their original insertion order in the Map).
+ *
+ * @param {Map}      registry
+ * @param {object}   config    Parsed config.json (may be null)
+ * @returns {Map}    A new Map with entries in the correct execution order
+ */
+function applyConfig(registry, config) {
+  if (!config) return registry;
+
+  const order = config.stepInterceptors && config.stepInterceptors.order;
+  if (!order) return registry;
+
+  // Build a map of name → desired position per stepType
+  const positions = new Map();  // name → index (lower = earlier)
+  for (const [stepType, list] of Object.entries(order)) {
+    list.forEach((name, idx) => positions.set(name, idx));
+  }
+
+  // Separate entries into ordered and unordered, then merge
+  const ordered   = [];
+  const unordered = [];
+
+  for (const [name, entry] of registry) {
+    if (positions.has(name)) {
+      ordered.push([name, entry, positions.get(name)]);
+    } else {
+      unordered.push([name, entry]);
+    }
+  }
+
+  ordered.sort((a, b) => a[2] - b[2]);
+
+  const sorted = new Map();
+  for (const [name, entry] of ordered)   sorted.set(name, entry);
+  for (const [name, entry] of unordered) sorted.set(name, entry);
+
+  return sorted;
 }
 
 // ---------------------------------------------------------------------------
@@ -167,6 +320,17 @@ function validateInterceptors(registry, siteRoot) {
         );
       }
     }
+  }
+
+  // Validate config.json if present
+  try {
+    const config = loadConfig(siteRoot);
+    if (config) {
+      const configErrors = validateConfig(config, registry);
+      errors.push(...configErrors);
+    }
+  } catch (e) {
+    errors.push(`config.json: ${e.message}`);
   }
 
   // Scan JSON files outside _interceptors for interceptBy references
@@ -375,6 +539,9 @@ function resolveExplicitInterceptors(value, registry, tools) {
 
 module.exports = {
   loadInterceptors,
+  loadConfig,
+  validateConfig,
+  applyConfig,
   validateInterceptors,
   runStepInterceptors,
   runExplicitInterceptor,
