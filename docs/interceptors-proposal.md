@@ -107,3 +107,37 @@ The scanning order is: first the `_interceptors` folder, then all JSON files out
 
 ## Running Interceptors
 The engine will run interceptors defensively in protected code, and will fail the build for any falling interceptor, and log comprehensive context.
+
+### Interceptors execution order
+Unless _explicitly specified_, the execution order of interceptors sharing the same `stepType` is filesystem scan order. To specify their execution order, user must create a `config.json` file within the `_interceptors` folder with content resembling the one below.
+```json
+{
+    "stepInterceptors": {
+        "order": {
+            "copy": [
+                "my.interceptor.name",
+                "my.other.interceptor.name"
+            ],
+            "resolve": [
+                "same.idea"
+            ],
+            "output": [
+                "same.idea.as.well"
+            ]
+        }
+    }
+}
+```
+
+The order within which interceptor names are listed under their `order[step name]` determines the order they will run in when that step is executed. Unlisted interceptors will run after all listed interceptors. The order of one unlisted interceptor with respect to another unlisted interceptor is filesystem scan order.
+
+The `config.json` shall withstand the following validation:
+- the file itself is optional;
+- if given, the file must have a `stepInterceptors` root with an `order` node and at least one child node — and at most three — of type Arrays, non-empty;
+- each child of `order` must be either `copy`, `resolve` or `output`;
+- all entries in any `order` child node must be unique and point to existing step interceptor definitions of the respective `stepType`; 
+- it is legit _not_ to define all step interceptors (i.e., lists must not be exhaustive).
+
+Failing any of the above is subject to validation/build failure.
+
+N.B.: Explicitly invoked interceptors execute at the time moment of their explicit trigger, so there is nothing to regulate in this aspect.
