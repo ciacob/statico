@@ -10,33 +10,13 @@ The name of an interceptor folder is irrelevant. Inside an interceptor folder th
 - `interceptor.json` (mandatory, defines the interceptor);
 - `transformation.js` (mandatory Node.js module, the entry point for the interceptor's logic; complex interceptors can have several Node.js modules, and even assets, organized in subfolders).
 
-The interceptor.json` has the following minimal structure:
+The `interceptor.json` has the following minimal structure:
 ```json
 {
     "name": "my.namespace.my.name",
-    "trigger" : {
-        "type": "step|explicit",
-        "stepType": "copy|resolve|output"
-    }
+    "stepType": "copy|resolve|output"
 }
 ```
-
-Interceptors can be either triggered by one of the **known steps** — in which case the engine decides on their arguments and instruments their transformation (the actual transform logic remains in user control) — or **explicitly**, by any JSON outside the `_interceptors` folder — e.g., `build.json`, `commons.json`, etc.
-
-One explicitly triggers an interceptor by providing its name and optionally one or more arguments, e.g.:
-```json
-{
-    "en": {
-        "interceptBy" : "ciacob.md",
-        "@read-from": "text/bio-en.md",
-        "@open-links-in-new-tab": "auto"
-    }
-}
-```
-
-The example depicts explicitly triggering a user-provided interceptor that consumes MD content and returns resulting. The value of the `en` node will be, at build time, the value returned by the interceptor.
-
-N.B.: When an explicitly triggered interceptor returns a value, that value is inherited by the node that triggered the interceptor.
 
 ## The Step Interceptors Handlers
 
@@ -73,9 +53,7 @@ At its core, the `transformation.js` of any interceptor must have a pure functio
  * return a value. MUST BE IMPLEMENTED AS A PURE FUNCTION (must not depend
  * on, nor mutate outer context).
  * 
- * @param args Object of named arguments sent by the engine (for step-triggered
- *             interceptors) or the user (for explicit-triggered
- *             interceptors — same name minus the leading "@").
+ * @param args Object of named arguments sent by the engine.
  * 
  * @param output Injected recipient to store transformation response into.
  *               The function is expected to set `output.response` to
@@ -94,16 +72,11 @@ function transform (args, output, tools) {
 If an `_interceptors` folder exist, all its subfolders must successfully validate as an interceptor:
 - at least one `interceptor.json` and one `transformation.js`;
 - with each `interceptor.json`:
-  - `name` and `trigger` are given and have formally valid values;
-  - `stepType` is required for `type=step`;
+  - `name` and `stepType` are given and have formally valid values;
   - `name` is unique;
-  - `name` is does not begin with `statico`;
+  - `name` does not begin with `statico`;
 - with each `transformation.js`:
   - a transform function must be publicly available.
-
-If any JSON outside the `_interceptors` folder — e.g., `build.json`, `commons.json` — contains an `interceptBy` field in any of its nodes, the value of the `interceptBy` field must match one of the known interceptors `name`.
-
-The scanning order is: first the `_interceptors` folder, then all JSON files outside of it. Node.js-specific JSON files, e.g., `package.json` will be skipped. If there is no `_interceptors` folder, no JSON is allowed to define `interceptBy`, anywhere.
 
 ## Running Interceptors
 The engine will run interceptors defensively in protected code, and will fail the build for any falling interceptor, and log comprehensive context.
@@ -140,4 +113,4 @@ The `config.json` shall withstand the following validation:
 
 Failing any of the above is subject to validation/build failure.
 
-N.B.: Explicitly invoked interceptors execute at the time moment of their explicit trigger, so there is nothing to regulate in this aspect.
+
