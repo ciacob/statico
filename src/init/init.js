@@ -37,23 +37,33 @@ List the main output files expected after a build, e.g. _out/index.html.
   '_interceptors/_interceptors-info.md': `# Interceptors
 
 Place interceptor subfolders here. Each subfolder must contain:
-  - interceptor.json  — defines the interceptor name and trigger
+  - interceptor.json  — defines the interceptor name and stepType
   - transformation.js — exports a pure \`transform(args, output, tools)\` function
 
-Two trigger types:
-  step:     hooked into copy/resolve/output steps automatically
-  explicit: triggered via \`interceptBy\` in any JSON node
+Each interceptor.json has the following structure:
+  {
+    "name":     "my.namespace.my.name",
+    "stepType": "copy|resolve|output"
+  }
+
+Interceptors hook into the named step type and fire automatically during the build.
 
 Engine-injected argument keys by step type:
   copy    : { "source-path", "target-path" }
   resolve : { "template", "value" }
   output  : { "content", "file-path" }
 
+The transform function signature:
+  function transform(args, output, tools) {
+    // output.response = true          — allow operation unchanged
+    // output.response = false         — skip/abort the operation
+    // output.response = <new value>   — substitute with alternate value
+  }
+
 Interceptor names must not begin with "statico".
 
 To control execution order of same-stepType interceptors, create
 a config.json in this folder:
-
   {
     "stepInterceptors": {
       "order": {
@@ -63,11 +73,9 @@ a config.json in this folder:
   }
 
 Unlisted interceptors run after listed ones in filesystem scan order.
-
-See the Statico documentation for full examples.
 `,
 
-  '_templates/_templates-info.md': `# Templates
+    '_templates/_templates-info.md': `# Templates
 
 Place your HTML (or any text) snippet files here.
 Templates may contain:

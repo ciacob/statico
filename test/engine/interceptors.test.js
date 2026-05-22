@@ -10,9 +10,9 @@ const os   = require('os');
 const {
   loadInterceptors,
   validateInterceptors,
+  validateConfig,
+  applyConfig,
   runStepInterceptors,
-  runExplicitInterceptor,
-  resolveExplicitInterceptors,
   InterceptorError,
 } = require('../../src/engine/interceptors');
 
@@ -36,7 +36,7 @@ async function makeInterceptor(baseDir, folderName, defOverrides, transformSrc) 
 
   const def = Object.assign({
     name: `test.${folderName}`,
-    trigger: { type: 'step', stepType: 'output' },
+    trigger: { stepType: 'output' },
   }, defOverrides);
 
   await fsp.writeFile(path.join(dir, 'interceptor.json'), JSON.stringify(def), 'utf8');
@@ -61,7 +61,7 @@ describe('loadInterceptors', () => {
   it('loads a valid interceptor', async () => {
     const site = await fsp.mkdtemp(path.join(os.tmpdir(), 'statico-int-load-'));
     try {
-      await makeInterceptor(site, 'alpha', { name: 'test.alpha', trigger: { type: 'step', stepType: 'output' } });
+      await makeInterceptor(site, 'alpha', { name: 'test.alpha', stepType: 'output' });
       const reg = loadInterceptors(site);
       assert.equal(reg.size, 1);
       assert.ok(reg.has('test.alpha'));
@@ -90,7 +90,7 @@ describe('validateInterceptors', () => {
   it('passes clean registry', async () => {
     const site = await fsp.mkdtemp(path.join(os.tmpdir(), 'statico-int-val-'));
     try {
-      await makeInterceptor(site, 'clean', { name: 'test.clean', trigger: { type: 'step', stepType: 'copy' } });
+      await makeInterceptor(site, 'clean', { name: 'test.clean', stepType: 'copy' });
       const reg = loadInterceptors(site);
       const { errors } = validateInterceptors(reg, site);
       assert.equal(errors.length, 0);
@@ -102,7 +102,7 @@ describe('validateInterceptors', () => {
   it('rejects name starting with statico', async () => {
     const site = await fsp.mkdtemp(path.join(os.tmpdir(), 'statico-int-res-'));
     try {
-      await makeInterceptor(site, 'reserved', { name: 'statico.something', trigger: { type: 'step', stepType: 'output' } });
+      await makeInterceptor(site, 'reserved', { name: 'statico.something', stepType: 'output' });
       const reg = loadInterceptors(site);
       const { errors } = validateInterceptors(reg, site);
       assert.ok(errors.some(e => e.includes('statico')));
@@ -123,36 +123,13 @@ describe('validateInterceptors', () => {
     }
   });
 
-  it('rejects interceptBy reference to unknown interceptor', async () => {
-    const site = await fsp.mkdtemp(path.join(os.tmpdir(), 'statico-int-ref-'));
+  it('rejects missing stepType', async () => {
+    const site = await fsp.mkdtemp(path.join(os.tmpdir(), 'statico-int-trg-'));
     try {
-      await fsp.mkdir(path.join(site, '_interceptors'), { recursive: true });
-      await fsp.mkdir(path.join(site, 'contents'), { recursive: true });
-      await fsp.writeFile(
-        path.join(site, 'contents', 'commons.json'),
-        JSON.stringify({ field: { interceptBy: 'nonexistent.interceptor' } }),
-        'utf8'
-      );
+      await makeInterceptor(site, 'badtype', { name: 'test.badtype' });
       const reg = loadInterceptors(site);
       const { errors } = validateInterceptors(reg, site);
-      assert.ok(errors.some(e => e.includes('nonexistent.interceptor')));
-    } finally {
-      await fsp.rm(site, { recursive: true, force: true });
-    }
-  });
-
-  it('rejects interceptBy when no _interceptors folder exists', async () => {
-    const site = await fsp.mkdtemp(path.join(os.tmpdir(), 'statico-int-nof-'));
-    try {
-      await fsp.mkdir(path.join(site, 'contents'), { recursive: true });
-      await fsp.writeFile(
-        path.join(site, 'contents', 'commons.json'),
-        JSON.stringify({ field: { interceptBy: 'some.interceptor' } }),
-        'utf8'
-      );
-      const reg = loadInterceptors(site);
-      const { errors } = validateInterceptors(reg, site);
-      assert.ok(errors.some(e => e.includes('interceptBy')));
+      assert.ok(errors.some(e => e.includes('stepType')));
     } finally {
       await fsp.rm(site, { recursive: true, force: true });
     }
@@ -164,20 +141,6 @@ describe('validateInterceptors', () => {
 // ---------------------------------------------------------------------------
 
 describe('runStepInterceptors', () => {
-  function makeRegistry(name, stepType, transformSrc) {
-    const fn = new Function(
-      'require', 'module', 'exports',
-      `(function(){ ${transformSrc} })()`
-    );
-    const mod = { exports: {} };
-    // simpler: just eval the transform inline
-    const transformFn = eval(`(${transformSrc})`);
-    return new Map([[name, {
-      definition: { name, trigger: { type: 'step', stepType } },
-      transformFn,
-    }]]);
-  }
-
   it('returns skip:false, value:null when no interceptors match', () => {
     const reg = new Map();
     const result = runStepInterceptors(reg, 'output', { 'content': 'hi', 'file-path': '/x' }, {});
@@ -187,7 +150,7 @@ describe('runStepInterceptors', () => {
 
   it('passes through when interceptor returns true', () => {
     const reg = new Map([['test.pass', {
-      definition: { name: 'test.pass', trigger: { type: 'step', stepType: 'output' } },
+      definition: { name: 'test.pass', stepType: 'output' },
       transformFn: (args, output) => { output.response = true; },
     }]]);
     const result = runStepInterceptors(reg, 'output', { 'content': 'hello', 'file-path': '/f' }, {});
@@ -197,7 +160,7 @@ describe('runStepInterceptors', () => {
 
   it('returns skip:true when interceptor returns false', () => {
     const reg = new Map([['test.deny', {
-      definition: { name: 'test.deny', trigger: { type: 'step', stepType: 'copy' } },
+      definition: { name: 'test.deny', stepType: 'copy' },
       transformFn: (args, output) => { output.response = false; },
     }]]);
     const result = runStepInterceptors(reg, 'copy', { 'source-path': '/a', 'target-path': '/b' }, {});
@@ -206,7 +169,7 @@ describe('runStepInterceptors', () => {
 
   it('returns alternate value when interceptor substitutes', () => {
     const reg = new Map([['test.alter', {
-      definition: { name: 'test.alter', trigger: { type: 'step', stepType: 'output' } },
+      definition: { name: 'test.alter', stepType: 'output' },
       transformFn: (args, output) => { output.response = { 'content': 'altered', 'file-path': args['file-path'] }; },
     }]]);
     const result = runStepInterceptors(reg, 'output', { 'content': 'original', 'file-path': '/f' }, {});
@@ -216,17 +179,16 @@ describe('runStepInterceptors', () => {
 
   it('ignores interceptors of a different stepType', () => {
     const reg = new Map([['test.copy', {
-      definition: { name: 'test.copy', trigger: { type: 'step', stepType: 'copy' } },
+      definition: { name: 'test.copy', stepType: 'copy' },
       transformFn: (args, output) => { output.response = false; },
     }]]);
-    // Running for 'output' — copy interceptor should not fire
     const result = runStepInterceptors(reg, 'output', { 'content': 'x', 'file-path': '/f' }, {});
     assert.equal(result.skip, false);
   });
 
   it('throws InterceptorError if transform throws', () => {
     const reg = new Map([['test.throw', {
-      definition: { name: 'test.throw', trigger: { type: 'step', stepType: 'resolve' } },
+      definition: { name: 'test.throw', stepType: 'resolve' },
       transformFn: () => { throw new Error('boom'); },
     }]]);
     assert.throws(
@@ -237,66 +199,13 @@ describe('runStepInterceptors', () => {
 });
 
 // ---------------------------------------------------------------------------
-// resolveExplicitInterceptors
-// ---------------------------------------------------------------------------
-
-describe('resolveExplicitInterceptors', () => {
-  const registry = new Map([['test.upper', {
-    definition: { name: 'test.upper', trigger: { type: 'explicit' } },
-    transformFn: (args, output) => {
-      output.response = (args['text'] || '').toUpperCase();
-    },
-  }]]);
-
-  it('replaces interceptBy node with response value', () => {
-    const input = { interceptBy: 'test.upper', '@text': 'hello' };
-    const result = resolveExplicitInterceptors(input, registry);
-    assert.equal(result, 'HELLO');
-  });
-
-  it('recurses into nested objects', () => {
-    const input = { outer: { interceptBy: 'test.upper', '@text': 'world' } };
-    const result = resolveExplicitInterceptors(input, registry);
-    assert.equal(result.outer, 'WORLD');
-  });
-
-  it('recurses into arrays', () => {
-    const input = [{ interceptBy: 'test.upper', '@text': 'a' }, 'plain'];
-    const result = resolveExplicitInterceptors(input, registry);
-    assert.equal(result[0], 'A');
-    assert.equal(result[1], 'plain');
-  });
-
-  it('leaves non-interceptor nodes untouched', () => {
-    const input = { title: 'hello', count: 42 };
-    const result = resolveExplicitInterceptors(input, registry);
-    assert.deepEqual(result, input);
-  });
-
-  it('throws for unknown interceptor name', () => {
-    const input = { interceptBy: 'test.nonexistent' };
-    assert.throws(() => resolveExplicitInterceptors(input, registry), InterceptorError);
-  });
-
-  it('throws when explicitly triggering a step interceptor', () => {
-    const stepReg = new Map([['test.step', {
-      definition: { name: 'test.step', trigger: { type: 'step', stepType: 'output' } },
-      transformFn: (args, output) => { output.response = true; },
-    }]]);
-    const input = { interceptBy: 'test.step' };
-    assert.throws(() => resolveExplicitInterceptors(input, stepReg), InterceptorError);
-  });
-});
-
-
-// ---------------------------------------------------------------------------
 // validateConfig
 // ---------------------------------------------------------------------------
 
 describe('validateConfig', () => {
   function makeReg(...entries) {
     return new Map(entries.map(([name, stepType]) => [name, {
-      definition: { name, trigger: { type: 'step', stepType } },
+      definition: { name, stepType },
       transformFn: () => {},
     }]));
   }
@@ -304,31 +213,26 @@ describe('validateConfig', () => {
   it('passes a valid config', () => {
     const reg = makeReg(['test.a', 'output'], ['test.b', 'output']);
     const config = { stepInterceptors: { order: { output: ['test.a', 'test.b'] } } };
-    const { validateConfig } = require('../../src/engine/interceptors');
     const errors = validateConfig(config, reg);
     assert.equal(errors.length, 0);
   });
 
   it('rejects missing stepInterceptors root', () => {
-    const { validateConfig } = require('../../src/engine/interceptors');
     const errors = validateConfig({}, new Map());
     assert.ok(errors.some(e => e.includes('stepInterceptors')));
   });
 
   it('rejects missing order node', () => {
-    const { validateConfig } = require('../../src/engine/interceptors');
     const errors = validateConfig({ stepInterceptors: {} }, new Map());
     assert.ok(errors.some(e => e.includes('order')));
   });
 
   it('rejects empty order object', () => {
-    const { validateConfig } = require('../../src/engine/interceptors');
     const errors = validateConfig({ stepInterceptors: { order: {} } }, new Map());
     assert.ok(errors.some(e => e.includes('at least one')));
   });
 
   it('rejects invalid step type key', () => {
-    const { validateConfig } = require('../../src/engine/interceptors');
     const errors = validateConfig(
       { stepInterceptors: { order: { loop: ['test.a'] } } },
       new Map()
@@ -338,7 +242,6 @@ describe('validateConfig', () => {
 
   it('rejects duplicate names within a list', () => {
     const reg = makeReg(['test.a', 'output']);
-    const { validateConfig } = require('../../src/engine/interceptors');
     const errors = validateConfig(
       { stepInterceptors: { order: { output: ['test.a', 'test.a'] } } },
       reg
@@ -347,7 +250,6 @@ describe('validateConfig', () => {
   });
 
   it('rejects reference to unknown interceptor', () => {
-    const { validateConfig } = require('../../src/engine/interceptors');
     const errors = validateConfig(
       { stepInterceptors: { order: { output: ['unknown.interceptor'] } } },
       new Map()
@@ -357,7 +259,6 @@ describe('validateConfig', () => {
 
   it('rejects reference to interceptor of wrong stepType', () => {
     const reg = makeReg(['test.copy', 'copy']);
-    const { validateConfig } = require('../../src/engine/interceptors');
     const errors = validateConfig(
       { stepInterceptors: { order: { output: ['test.copy'] } } },
       reg
@@ -365,23 +266,8 @@ describe('validateConfig', () => {
     assert.ok(errors.some(e => e.includes('test.copy')));
   });
 
-  it('rejects reference to explicit interceptor', () => {
-    const reg = new Map([['test.explicit', {
-      definition: { name: 'test.explicit', trigger: { type: 'explicit' } },
-      transformFn: () => {},
-    }]]);
-    const { validateConfig } = require('../../src/engine/interceptors');
-    const errors = validateConfig(
-      { stepInterceptors: { order: { output: ['test.explicit'] } } },
-      reg
-    );
-    assert.ok(errors.some(e => e.includes('test.explicit')));
-  });
-
   it('accepts partial lists (not exhaustive)', () => {
     const reg = makeReg(['test.a', 'output'], ['test.b', 'output'], ['test.c', 'output']);
-    const { validateConfig } = require('../../src/engine/interceptors');
-    // Only listing two of three — should be valid
     const errors = validateConfig(
       { stepInterceptors: { order: { output: ['test.c', 'test.a'] } } },
       reg
@@ -395,11 +281,9 @@ describe('validateConfig', () => {
 // ---------------------------------------------------------------------------
 
 describe('applyConfig', () => {
-  const { applyConfig } = require('../../src/engine/interceptors');
-
   function makeReg(...names) {
     return new Map(names.map(name => [name, {
-      definition: { name, trigger: { type: 'step', stepType: 'output' } },
+      definition: { name, trigger: { stepType: 'output' } },
       transformFn: () => {},
     }]));
   }
@@ -422,10 +306,8 @@ describe('applyConfig', () => {
     const config = { stepInterceptors: { order: { output: ['c', 'a'] } } };
     const result = applyConfig(reg, config);
     const keys = [...result.keys()];
-    // c and a must come first
     assert.equal(keys[0], 'c');
     assert.equal(keys[1], 'a');
-    // b and d follow in filesystem scan order
     assert.ok(keys.includes('b'));
     assert.ok(keys.includes('d'));
   });

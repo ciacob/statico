@@ -9,10 +9,6 @@
  *   - interceptor.json  — definition (name, trigger)
  *   - transformation.js — pure transform function
  *
- * Two trigger types:
- *   - "step"     : engine injects named args; hooked into copy/resolve/output steps
- *   - "explicit" : user triggers via `interceptBy` in any JSON node
- *
  * Engine-injected argument keys per step type:
  *   copy    : { "source-path", "target-path" }
  *   resolve : { "template", "value" }
@@ -43,8 +39,6 @@ const DEFINITION_FILE   = 'interceptor.json';
 const TRANSFORM_FILE    = 'transformation.js';
 const RESERVED_PREFIX   = 'statico';
 const VALID_STEP_TYPES  = ['copy', 'resolve', 'output'];
-const VALID_TRIGGER_TYPES = ['step', 'explicit'];
-const ARG_PREFIX        = '@';
 const CONFIG_FILE       = 'config.json';
 
 // ---------------------------------------------------------------------------
@@ -103,9 +97,10 @@ function loadInterceptors(siteRoot) {
     registry.set(definition.name, { definition, transformFn, dir });
   }
 
-  return registry;
+  // Load config.json and re-order registry accordingly
+  const config = loadConfig(siteRoot);
+  return applyConfig(registry, config);
 }
-
 
 // ---------------------------------------------------------------------------
 // Config (execution order)
@@ -197,17 +192,10 @@ function validateConfig(config, registry) {
       }
 
       // Must reference a step interceptor of the matching stepType
-      if (entry.definition.trigger.type !== 'step') {
-        errors.push(
-          `config.json "order.${stepType}" references "${name}" which is not a step interceptor`
-        );
-        continue;
-      }
-
-      if (entry.definition.trigger.stepType !== stepType) {
+      if (entry.definition.stepType !== stepType) {
         errors.push(
           `config.json "order.${stepType}" references "${name}" whose stepType is ` +
-          `"${entry.definition.trigger.stepType}", not "${stepType}"`
+          `"${entry.definition.stepType}", not "${stepType}"`
         );
       }
     }
@@ -217,9 +205,9 @@ function validateConfig(config, registry) {
 }
 
 /**
- * Re-order the registry entries for a given stepType according to config.json.
+ * Re-order the registry entries according to config.json.
  * Listed interceptors run first in specified order; unlisted ones follow in
- * filesystem scan order (their original insertion order in the Map).
+ * filesystem scan order.
  *
  * @param {Map}      registry
  * @param {object}   config    Parsed config.json (may be null)
@@ -263,8 +251,7 @@ function applyConfig(registry, config) {
 // ---------------------------------------------------------------------------
 
 /**
- * Validate all loaded interceptors and optionally scan JSON files for
- * `interceptBy` references.
+ * Validate all loaded interceptors.
  *
  * @param {Map}    registry   Result of loadInterceptors()
  * @param {string} siteRoot
@@ -275,7 +262,7 @@ function validateInterceptors(registry, siteRoot) {
   const warnings = [];
   const names    = new Set();
 
-  for (const [name, { definition, transformFn }] of registry) {
+  for (const [name, { definition }] of registry) {
 
     // name present and valid
     if (!name || typeof name !== 'string') {
@@ -294,31 +281,14 @@ function validateInterceptors(registry, siteRoot) {
     }
     names.add(name);
 
-    // trigger present
-    const { trigger } = definition;
-    if (!trigger || typeof trigger !== 'object') {
-      errors.push(`Interceptor "${name}" is missing a "trigger" object`);
-      continue;
-    }
-
-    // trigger.type valid
-    if (!VALID_TRIGGER_TYPES.includes(trigger.type)) {
+    // stepType present and valid
+    if (!definition.stepType) {
+      errors.push(`Interceptor "${name}" is missing "stepType"`);
+    } else if (!VALID_STEP_TYPES.includes(definition.stepType)) {
       errors.push(
-        `Interceptor "${name}" has invalid trigger type "${trigger.type}" ` +
-        `(expected: ${VALID_TRIGGER_TYPES.join(', ')})`
+        `Interceptor "${name}" has invalid stepType "${definition.stepType}" ` +
+        `(expected: ${VALID_STEP_TYPES.join(', ')})`
       );
-    }
-
-    // stepType required and valid when type=step
-    if (trigger.type === 'step') {
-      if (!trigger.stepType) {
-        errors.push(`Interceptor "${name}" trigger type "step" requires "stepType"`);
-      } else if (!VALID_STEP_TYPES.includes(trigger.stepType)) {
-        errors.push(
-          `Interceptor "${name}" has invalid stepType "${trigger.stepType}" ` +
-          `(expected: ${VALID_STEP_TYPES.join(', ')})`
-        );
-      }
     }
   }
 
@@ -333,76 +303,7 @@ function validateInterceptors(registry, siteRoot) {
     errors.push(`config.json: ${e.message}`);
   }
 
-  // Scan JSON files outside _interceptors for interceptBy references
-  const knownNames = new Set(registry.keys());
-  scanJsonFiles(siteRoot, knownNames, errors, warnings);
-
   return { errors, warnings };
-}
-
-/**
- * Recursively scan all JSON files in siteRoot (excluding _interceptors,
- * node_modules, and known Node.js-specific files) for `interceptBy` usage.
- *
- * @param {string}   siteRoot
- * @param {Set}      knownNames
- * @param {string[]} errors
- * @param {string[]} warnings
- */
-function scanJsonFiles(siteRoot, knownNames, errors, warnings) {
-  const SKIP_FILES = new Set(['package.json', 'package-lock.json']);
-  const SKIP_DIRS  = new Set(['_interceptors', 'node_modules', '_out', '_logs']);
-
-  function walk(dir) {
-    let entries;
-    try { entries = fs.readdirSync(dir, { withFileTypes: true }); }
-    catch { return; }
-
-    for (const entry of entries) {
-      const full = path.join(dir, entry.name);
-      if (entry.isDirectory()) {
-        if (!SKIP_DIRS.has(entry.name)) walk(full);
-      } else if (entry.isFile() && entry.name.endsWith('.json')) {
-        if (SKIP_FILES.has(entry.name)) continue;
-        let data;
-        try { data = JSON.parse(fs.readFileSync(full, 'utf8')); }
-        catch { continue; }
-
-        findInterceptByRefs(data, full, knownNames, errors, warnings);
-      }
-    }
-  }
-
-  walk(siteRoot);
-}
-
-/**
- * Recursively find all `interceptBy` values in a parsed JSON value.
- */
-function findInterceptByRefs(value, filePath, knownNames, errors, warnings) {
-  if (!value || typeof value !== 'object') return;
-
-  if (Array.isArray(value)) {
-    value.forEach(v => findInterceptByRefs(v, filePath, knownNames, errors, warnings));
-    return;
-  }
-
-  if ('interceptBy' in value) {
-    const ref = value.interceptBy;
-    if (knownNames.size === 0) {
-      errors.push(
-        `"interceptBy: ${ref}" found in ${filePath} but no _interceptors folder exists`
-      );
-    } else if (!knownNames.has(ref)) {
-      errors.push(
-        `"interceptBy: ${ref}" in ${filePath} does not match any known interceptor`
-      );
-    }
-  }
-
-  for (const v of Object.values(value)) {
-    findInterceptByRefs(v, filePath, knownNames, errors, warnings);
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -449,8 +350,7 @@ function runStepInterceptors(registry, stepType, args, tools) {
   let currentValue = args;
 
   for (const [name, { definition, transformFn }] of registry) {
-    if (definition.trigger.type !== 'step') continue;
-    if (definition.trigger.stepType !== stepType) continue;
+    if (definition.stepType !== stepType) continue;
 
     // Merge current value into args if it has been altered by a previous interceptor
     const effectiveArgs = typeof currentValue === 'object' && currentValue !== null
@@ -469,70 +369,6 @@ function runStepInterceptors(registry, stepType, args, tools) {
   return { skip: false, value: currentValue === args ? null : currentValue };
 }
 
-/**
- * Resolve an explicitly triggered interceptor node.
- * The node must have an `interceptBy` key and optional `@`-prefixed arg keys.
- *
- * @param {object} node       The JSON node containing `interceptBy`
- * @param {Map}    registry
- * @param {object} [tools]
- * @returns {*}  The value returned by output.response
- */
-function runExplicitInterceptor(node, registry, tools) {
-  const name = node.interceptBy;
-  const entry = registry.get(name);
-
-  if (!entry) {
-    throw new InterceptorError(`Explicit interceptor not found: "${name}"`);
-  }
-  if (entry.definition.trigger.type !== 'explicit') {
-    throw new InterceptorError(
-      `Interceptor "${name}" is a step interceptor and cannot be triggered explicitly`
-    );
-  }
-
-  // Build args object from @-prefixed keys, stripping the prefix
-  const args = {};
-  for (const [key, val] of Object.entries(node)) {
-    if (key === 'interceptBy') continue;
-    if (key.startsWith(ARG_PREFIX)) {
-      args[key.slice(ARG_PREFIX.length)] = val;
-    }
-  }
-
-  return runTransform(entry.transformFn, args, tools, name);
-}
-
-/**
- * Walk a value (object/array/primitive) and resolve any explicit interceptor
- * nodes found within it. Returns a new value with all interceptor nodes
- * replaced by their responses.
- *
- * @param {*}      value
- * @param {Map}    registry
- * @param {object} [tools]
- * @returns {*}
- */
-function resolveExplicitInterceptors(value, registry, tools) {
-  if (!value || typeof value !== 'object') return value;
-
-  if (Array.isArray(value)) {
-    return value.map(v => resolveExplicitInterceptors(v, registry, tools));
-  }
-
-  // If this node is an explicit interceptor trigger, resolve it
-  if ('interceptBy' in value) {
-    return runExplicitInterceptor(value, registry, tools);
-  }
-
-  // Otherwise recurse into object values
-  const result = {};
-  for (const [k, v] of Object.entries(value)) {
-    result[k] = resolveExplicitInterceptors(v, registry, tools);
-  }
-  return result;
-}
-
 // ---------------------------------------------------------------------------
 // Exports
 // ---------------------------------------------------------------------------
@@ -544,9 +380,7 @@ module.exports = {
   applyConfig,
   validateInterceptors,
   runStepInterceptors,
-  runExplicitInterceptor,
-  resolveExplicitInterceptors,
+  runTransform,
   InterceptorError,
   INTERCEPTORS_DIR,
-  ARG_PREFIX,
 };
