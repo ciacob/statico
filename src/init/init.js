@@ -50,19 +50,6 @@ Engine-injected argument keys by step type:
   output  : { "content", "file-path" }
 
 Interceptor names must not begin with "statico".
-
-To control execution order of same-stepType interceptors, create
-a config.json in this folder:
-
-  {
-    "stepInterceptors": {
-      "order": {
-        "output": ["my.first.interceptor", "my.second.interceptor"]
-      }
-    }
-  }
-
-Unlisted interceptors run after listed ones in filesystem scan order.
 See the Statico documentation for full examples.
 `,
 
